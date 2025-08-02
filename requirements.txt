@@ -1,10 +1,12 @@
 streamlit
-langchain==0.2.1
+langchain==0.1.20
 langchain-community==0.0.21
 groq
 faiss-cpu
 pypdf
 sentence-transformers
+
+
 
 
 
