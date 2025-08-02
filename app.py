@@ -1,7 +1,7 @@
 import os
 import tempfile
 import streamlit as st
-from langchain_groq import ChatGroq
+from langchain.llms import Groq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain.document_loaders import PyPDFLoader
@@ -11,13 +11,13 @@ from langchain.embeddings import HuggingFaceEmbeddings
 
 
 def load_llm():
-    api_key=os.getenv("GROQ_API_KEY")
+    api_key = os.getenv("GROQ_API_KEY")
 
     if not api_key:
-        st.error("Please set your GROQ_API_KEY in the .env file.")
+        st.error("❌ GROQ_API_KEY is not set. Please add it in Streamlit Cloud → Secrets.")
         st.stop()
 
-    return ChatGroq(api_key=api_key, model="llama3-8b-8192")
+    return Groq(api_key=api_key, model="llama3-8b-8192")
 
 
 def build_chain(llm):
@@ -109,4 +109,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
