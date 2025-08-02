@@ -1,94 +1,117 @@
 import os
+import tempfile
 import streamlit as st
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.vectorstores.faiss import FAISS
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain_community.llms import Groq
-from langchain.chains import ConversationalRetrievalChain
-from langchain.chains import ConversationChain
-from langchain.memory import ConversationBufferMemory
-from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnableConfig
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.vectorstores import FAISS
+from langchain.embeddings import HuggingFaceEmbeddings
 
-# Set up the page
-st.set_page_config(page_title="Hybrid Chatbot", layout="centered")
-st.title("🤖 Hybrid RAG Chatbot (Groq + LangChain)")
 
-# Get Groq API key
-groq_api_key = st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY")
-if not groq_api_key:
-    st.error("Please set your GROQ_API_KEY in Streamlit secrets or environment.")
-    st.stop()
+def load_llm():
+    load_dotenv()
+    api_key=os.getenv("GROQ_API_KEY")
 
-# Set up LLM
-llm = Groq(
-    api_key=groq_api_key,
-    model="LLaMA3-8b-8192",
-)
+    if not api_key:
+        st.error("Please set your GROQ_API_KEY in the .env file.")
+        st.stop()
 
-# Memory for conversation
-memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+    return ChatGroq(api_key=api_key, model="llama3-8b-8192")
 
-# Load and split PDF
-def load_and_split_pdf(pdf_path):
-    loader = PyPDFLoader(pdf_path)
-    documents = loader.load()
-    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    return text_splitter.split_documents(documents)
 
-# Create FAISS vector store
-def create_vectorstore(docs):
-    embeddings = HuggingFaceEmbeddings()
-    return FAISS.from_documents(docs, embeddings)
+def build_chain(llm):
+    prompt=ChatPromptTemplate.from_template("User: {question}\nAI:")
+    output_parser=StrOutputParser()
+    return prompt | llm | output_parser
 
-# Upload PDF
-uploaded_file = st.file_uploader("📄 Upload a PDF", type="pdf")
 
-# Store chat history in session state
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+def build_context_prompt(user_input, retriever=None):
+    """Build full conversation history and optionally add PDF context."""
+    prompt= ""
 
-# Process PDF and initialize retrieval chain
-if uploaded_file:
-    with open("temp.pdf", "wb") as f:
-        f.write(uploaded_file.read())
+    # Add past messages
+    for entry in st.session_state.history:
+        role= "User" if entry["role"] == "user" else "AI"
+        prompt+=f"{role}: {entry['content']}\n"
 
-    chunks = load_and_split_pdf("temp.pdf")
-    vectorstore = create_vectorstore(chunks)
-    retriever = vectorstore.as_retriever()
-    rag_chain = ConversationalRetrievalChain.from_llm(llm, retriever, memory=memory)
-else:
-    prompt = PromptTemplate.from_template(
-        """You are a helpful assistant. Engage in conversation and answer questions naturally.
+    # Add PDF context if retriever is available
+    if retriever:
+        docs= retriever.get_relevant_documents(user_input)
+        context="\n".join([doc.page_content for doc in docs])
+        if context.strip():
+            prompt+=f"\nUse the following context to assist:\n{context}\n"
 
-        Chat history:
-        {chat_history}
+    # Add current question
+    prompt+=f"User: {user_input}\nAI:"
+    return prompt
 
-        User: {input}
-        Assistant:"""
-    )
-    chain = prompt | llm | StrOutputParser()
 
-# User input
-user_input = st.chat_input("Type your message here...")
+def chat_with_bot(chain, full_prompt):
+    return chain.invoke({"question": full_prompt})
 
-if user_input:
-    # Show user message in chat
-    st.chat_message("user").markdown(user_input)
+
+def main():
+    st.set_page_config(page_title="🤖 Hybrid Chatbot", page_icon="📄")
+    st.title("🤖 Chat with AI (Groq + RAG)")
+    st.caption("Ask anything! Upload a PDF to answer from your own docs.")
+
+    llm=load_llm()
+    chain=build_chain(llm)
+
+    if "history" not in st.session_state:
+        st.session_state.history=[]
+
+    uploaded_file=st.file_uploader("📄 Upload PDF for RAG", type="pdf")
+    retriever=None
 
     if uploaded_file:
-        # PDF-based RAG response
-        response = rag_chain.invoke({"question": user_input, "chat_history": st.session_state.chat_history})
-        answer = response["answer"]
-    else:
-        # General chat response
-        answer = chain.invoke({"input": user_input, "chat_history": memory.buffer})
+        with st.spinner("📄 Processing PDF..."):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(uploaded_file.read())
+                tmp_path=tmp.name
 
-    # Display answer
-    st.chat_message("assistant").markdown(answer)
-    st.session_state.chat_history.append((user_input, answer))
+            loader=PyPDFLoader(tmp_path)
+            docs=loader.load()
+
+            splitter=RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+            chunks=splitter.split_documents(docs)
+
+            embeddings=HuggingFaceEmbeddings()
+            vectorstore=FAISS.from_documents(chunks, embeddings)
+            retriever=vectorstore.as_retriever(search_type="similarity", k=3)
+
+        st.success("✅ PDF processed and ready for questions!")
+
+    for entry in st.session_state.history:
+        with st.chat_message(entry["role"]):
+            st.markdown(entry["content"])
+
+    user_input=st.chat_input("Ask your question:")
+
+    if user_input:
+        st.chat_message("user").markdown(user_input)
+
+        full_prompt=build_context_prompt(user_input, retriever)
+
+        with st.spinner("💬 Thinking..."):
+            response=chat_with_bot(chain, full_prompt)
+
+        st.chat_message("ai").markdown(response)
+
+        st.session_state.history.append({"role": "user", "content": user_input})
+        st.session_state.history.append({"role": "ai", "content": response})
+
+    if st.button("🗑️ Clear Chat"):
+        st.session_state.history=[]
+        st.rerun()
+
+
+if __name__ == "__main__":
+    main()
+
 
 
 
