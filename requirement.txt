@@ -1,8 +1,8 @@
 streamlit
 langchain
 groq
-python-dotenv
-PyMuPDF
 faiss-cpu
-transformers
+pypdf
+python-dotenv
 sentence-transformers
+
