@@ -4,19 +4,17 @@ import streamlit as st
 from langchain.llms import Groq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 
 def load_llm():
     api_key = os.getenv("GROQ_API_KEY")
-
     if not api_key:
         st.error("❌ GROQ_API_KEY is not set. Please add it in Streamlit Cloud → Secrets.")
         st.stop()
-
     return Groq(api_key=api_key, model="llama3-8b-8192")
 
 
@@ -83,12 +81,10 @@ def main():
 
         st.success("✅ PDF processed and ready for questions!")
 
-    # Display chat history
     for entry in st.session_state.history:
         with st.chat_message(entry["role"]):
             st.markdown(entry["content"])
 
-    # Take user input
     user_input = st.chat_input("Ask your question:")
 
     if user_input:
@@ -104,7 +100,6 @@ def main():
         st.session_state.history.append({"role": "user", "content": user_input})
         st.session_state.history.append({"role": "ai", "content": response})
 
-    # Reset button
     if st.button("🗑️ Clear Chat"):
         st.session_state.history = []
         st.rerun()
@@ -112,5 +107,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
