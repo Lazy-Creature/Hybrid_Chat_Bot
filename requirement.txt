@@ -1,8 +1,0 @@
-streamlit
-langchain
-groq
-faiss-cpu
-pypdf
-python-dotenv
-sentence-transformers
-
