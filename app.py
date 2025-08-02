@@ -1,81 +1,96 @@
 import os
 import streamlit as st
-from PyPDF2 import PdfReader
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_groq import ChatGroq
+from langchain.vectorstores.faiss import FAISS
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_community.llms import Groq
 from langchain.chains import ConversationalRetrievalChain
+from langchain.chains import ConversationChain
 from langchain.memory import ConversationBufferMemory
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnableConfig
+from langchain_core.output_parsers import StrOutputParser
 
-# Title
-st.set_page_config(page_title="Hybrid RAG Chatbot 💬", layout="wide")
-st.title("🤖 Hybrid RAG Chatbot - PDF + General Q&A")
+# Set up the page
+st.set_page_config(page_title="Hybrid Chatbot", layout="centered")
+st.title("🤖 Hybrid RAG Chatbot (Groq + LangChain)")
 
-# Load GROQ API key
-groq_api_key = os.environ.get("GROQ_API_KEY")
+# Get Groq API key
+groq_api_key = st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY")
 if not groq_api_key:
-    st.error("🚫 GROQ_API_KEY not found in environment. Please set it in Streamlit Secrets.")
+    st.error("Please set your GROQ_API_KEY in Streamlit secrets or environment.")
     st.stop()
 
-# Initialize LLM
-llm = ChatGroq(temperature=0, groq_api_key=groq_api_key, model_name="LLaMA3-8b-8192")
+# Set up LLM
+llm = Groq(
+    api_key=groq_api_key,
+    model="LLaMA3-8b-8192",
+)
 
-# Sidebar for PDF upload
-with st.sidebar:
-    st.header("📄 Upload your PDF")
-    uploaded_file = st.file_uploader("Choose a PDF", type="pdf")
+# Memory for conversation
+memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
 
 # Load and split PDF
 def load_and_split_pdf(pdf_path):
     loader = PyPDFLoader(pdf_path)
     documents = loader.load()
-    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     return text_splitter.split_documents(documents)
 
-# Initialize Vector Store
-def create_vectorstore(chunks):
+# Create FAISS vector store
+def create_vectorstore(docs):
     embeddings = HuggingFaceEmbeddings()
-    return FAISS.from_documents(chunks, embeddings)
+    return FAISS.from_documents(docs, embeddings)
 
-# Main chat interface
+# Upload PDF
+uploaded_file = st.file_uploader("📄 Upload a PDF", type="pdf")
+
+# Store chat history in session state
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+# Process PDF and initialize retrieval chain
 if uploaded_file:
-    with st.spinner("🔄 Processing PDF..."):
-        with open("temp.pdf", "wb") as f:
-            f.write(uploaded_file.read())
+    with open("temp.pdf", "wb") as f:
+        f.write(uploaded_file.read())
 
-        chunks = load_and_split_pdf("temp.pdf")
-        vectorstore = create_vectorstore(chunks)
-
-        memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-
-        qa_chain = ConversationalRetrievalChain.from_llm(
-            llm=llm,
-            retriever=vectorstore.as_retriever(),
-            memory=memory
-        )
-
-        st.success("✅ PDF processed. Ask questions below!")
-
-        # Chat UI
-        if "chat_history" not in st.session_state:
-            st.session_state.chat_history = []
-
-        user_query = st.chat_input("Ask anything about your PDF or in general...")
-        if user_query:
-            response = qa_chain.run(user_query)
-            st.session_state.chat_history.append((user_query, response))
-
-        # Display history
-        for user_msg, bot_msg in st.session_state.chat_history:
-            with st.chat_message("🧑‍💻"):
-                st.markdown(user_msg)
-            with st.chat_message("🤖"):
-                st.markdown(bot_msg)
-
+    chunks = load_and_split_pdf("temp.pdf")
+    vectorstore = create_vectorstore(chunks)
+    retriever = vectorstore.as_retriever()
+    rag_chain = ConversationalRetrievalChain.from_llm(llm, retriever, memory=memory)
 else:
-    st.info("📂 Please upload a PDF from the sidebar to get started.")
+    prompt = PromptTemplate.from_template(
+        """You are a helpful assistant. Engage in conversation and answer questions naturally.
+
+        Chat history:
+        {chat_history}
+
+        User: {input}
+        Assistant:"""
+    )
+    chain = prompt | llm | StrOutputParser()
+
+# User input
+user_input = st.chat_input("Type your message here...")
+
+if user_input:
+    # Show user message in chat
+    st.chat_message("user").markdown(user_input)
+
+    if uploaded_file:
+        # PDF-based RAG response
+        response = rag_chain.invoke({"question": user_input, "chat_history": st.session_state.chat_history})
+        answer = response["answer"]
+    else:
+        # General chat response
+        answer = chain.invoke({"input": user_input, "chat_history": memory.buffer})
+
+    # Display answer
+    st.chat_message("assistant").markdown(answer)
+    st.session_state.chat_history.append((user_input, answer))
+
+
 
 
 
